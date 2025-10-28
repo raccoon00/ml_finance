@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 datasets/
+notebooks/.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints
+**/.ipynb_checkpoints/
 .ipynb_checkpoints/
 *.avi
 *.pt
