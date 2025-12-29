@@ -41,17 +41,38 @@ async def _fetch_board_candles(
     session: aiohttp.ClientSession,
     security: str,
     *,
-    engine: str,
-    market: str,
-    board: str,
+    engine: str = "stock",
+    market: str = "shares",
+    board: str = "TQBR",
+    interval: int = 24,
 ) -> pd.DataFrame:
     """
-    Загрузка дневных свечей по указанной бумаге (доска/рынок/движок ISS MOEX).
+    Загружает дневные свечи по указанной бумаге с ISS MOEX.
+
+    Параметры:
+    - session: aiohttp.ClientSession для выполнения запросов
+    - security: тикер ценной бумаги (например, 'SBER')
+    - engine: движок торговой системы (по умолчанию 'stock')
+    - market: рынок (по умолчанию 'shares')
+    - board: торговая доска (по умолчанию 'TQBR')
+    - interval: интервал свечей
+    1 - 1 минута
+    10 - 10 минут
+    60 - час
+    24 - 1 день
+    7 - неделя
+    31 - месяц
+    4 - квартал
+
+    Возвращает:
+    - DataFrame с колонками: begin, open, high, low, close, volume, end, value
+      и индексом TRADEDATE (дата торгов), отсортированный по возрастанию дат.
+      Если данные отсутствуют, возвращает пустой DataFrame.
     """
     candles: List[Dict[str, Any]] = await aiomoex.get_board_candles(
         session,
         security,
-        interval=24,
+        interval=interval,
         board=board,
         market=market,
         engine=engine,
@@ -108,7 +129,11 @@ async def _fetch_splits(
 
     if not split_df.empty:
         split_df["tradedate"] = pd.to_datetime(split_df["tradedate"], errors="coerce")
-        split_df = split_df.dropna(subset=["tradedate", "before", "after"]).set_index("tradedate").sort_index()
+        split_df = (
+            split_df.dropna(subset=["tradedate", "before", "after"])
+            .set_index("tradedate")
+            .sort_index()
+        )
     return split_df
 
 
@@ -122,7 +147,11 @@ def _align_dividends_to_price(
     Выравнивание денежных дивидендов по датам торгового индекса ценового ряда.
     """
     div_ser = pd.Series(0.0, index=df_price.index)
-    if df_divs.empty or "value" not in df_divs.columns or align_col not in df_divs.columns:
+    if (
+        df_divs.empty
+        or "value" not in df_divs.columns
+        or align_col not in df_divs.columns
+    ):
         return div_ser
 
     tmp = df_divs[[align_col, "value"]].dropna().copy()
@@ -162,23 +191,26 @@ def _compute_adj_close(
     Расчёт скорректированной цены закрытия методом обратного накопления корректировок.
     """
     closes = df["close"].to_numpy()[::-1]
+    closes = df["open"].to_numpy()[::-1]
+
     prev_close = df["close"].shift(1).to_numpy()[::-1]
     prev_prev = df["close"].shift(2).to_numpy()[::-1]
     divs = df["dividend"].to_numpy()[::-1]
     splits = df["split_ratio"].to_numpy()[::-1]
     dates = df.index.to_numpy()[::-1]
 
-    adj_rev: List[float] = []
+    adj_closes = closes.copy()
+    adj_opens = opens.copy()
+
     cum_split: float = 1.0
     cum_adj: float = 1.0
 
     for c, p1, p2, r, d, dt in zip(closes, prev_close, prev_prev, splits, divs, dates):
-        if np.isfinite(r) and r != 1.0:
-            cum_split *= float(r)
+        cum_split *= float(r)
+
         if d != 0.0:
             pref = p1 if pd.Timestamp(dt) > div_switch_date else p2
-            if pref and np.isfinite(pref) and float(pref) != 0.0:
-                cum_adj *= 1.0 - float(d) / (cum_split * float(pref))
+            cum_adj *= 1.0 - float(d) / (cum_split * float(pref))
         adj_rev.append(float(c) * float(cum_adj))
 
     return pd.Series(adj_rev[::-1], index=df.index, name="adj_close")
@@ -203,8 +235,16 @@ def _build_summary_rows(
     first_div = None
     last_div = None
     if not dividend_df.empty:
-        date_col = "paymentdate" if "paymentdate" in dividend_df.columns else "registryclosedate"
-        dates_ser = pd.to_datetime(dividend_df[date_col], errors="coerce").dropna().sort_values()
+        date_col = (
+            "paymentdate"
+            if "paymentdate" in dividend_df.columns
+            else "registryclosedate"
+        )
+        dates_ser = (
+            pd.to_datetime(dividend_df[date_col], errors="coerce")
+            .dropna()
+            .sort_values()
+        )
         div_count = int(len(dates_ser))
         if div_count > 0:
             first_div = dates_ser.iloc[0]
@@ -228,13 +268,29 @@ def _build_summary_rows(
 
     rows: List[Tuple[str, str, str]] = [
         ("Бумага", security, "magenta"),
-        ("Время fetch", f"{fetch_seconds*1000:.0f} мс", "cyan"),
-        ("История", f"{first_dt.date() if pd.notna(first_dt) else '—'} → {last_dt.date() if pd.notna(last_dt) else '—'}", "blue"),
+        ("Время fetch", f"{fetch_seconds * 1000:.0f} мс", "cyan"),
+        (
+            "История",
+            f"{first_dt.date() if pd.notna(first_dt) else '—'} → {last_dt.date() if pd.notna(last_dt) else '—'}",
+            "blue",
+        ),
         ("Торговых дней", f"{n_days}", "blue"),
         ("Дивиденды (шт.)", f"{div_count}", "green"),
-        ("Средний интервал", f"{mean_gap_days:.1f} дн." if np.isfinite(mean_gap_days) else "—", "green"),
-        ("Первая выплата", f"{first_div.date() if first_div is not None else '—'}", "green"),
-        ("Последняя выплата", f"{last_div.date() if last_div is not None else '—'}", "green"),
+        (
+            "Средний интервал",
+            f"{mean_gap_days:.1f} дн." if np.isfinite(mean_gap_days) else "—",
+            "green",
+        ),
+        (
+            "Первая выплата",
+            f"{first_div.date() if first_div is not None else '—'}",
+            "green",
+        ),
+        (
+            "Последняя выплата",
+            f"{last_div.date() if last_div is not None else '—'}",
+            "green",
+        ),
         ("Сплиты", f"{split_count}", "yellow"),
         ("Объединения", f"{merge_count}", "yellow"),
         ("Совокупный коэффициент", f"{net_ratio:.6g}", "yellow"),
@@ -283,22 +339,48 @@ async def share_adjusted(
             if verbose:
                 printer.summary_card(
                     f"MOEX {security}",
-                    [("Время fetch", f"{fetch_seconds*1000:.0f} мс", "cyan"),
-                     ("История", "нет данных", "yellow")],
+                    [
+                        ("Время fetch", f"{fetch_seconds * 1000:.0f} мс", "cyan"),
+                        ("История", "нет данных", "yellow"),
+                    ],
                 )
-            cols = ["open", "high", "low", "close", "volume", "dividend", "split_ratio", "adj_close", "logret"]
+            cols = [
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "dividend",
+                "split_ratio",
+                "adj_close",
+                "logret",
+            ]
             return pd.DataFrame(columns=cols)
 
         df = df_price.copy()
-        df["dividend"] = _align_dividends_to_price(df, dividend_df, align_col="registryclosedate")
+        df["dividend"] = _align_dividends_to_price(
+            df, dividend_df, align_col="registryclosedate"
+        )
         df["split_ratio"] = _apply_split_ratios(df, split_df)
         df["adj_close"] = _compute_adj_close(df, div_switch_date=DIV_SWITCH_DATE)
         df["logret"] = compute_log_returns(df["adj_close"])
 
         if verbose:
-            rows = _build_summary_rows(security, df, dividend_df, split_df, fetch_seconds)
+            rows = _build_summary_rows(
+                security, df, dividend_df, split_df, fetch_seconds
+            )
             printer.summary_card(f"MOEX {security}", rows)
 
-        cols = ["open", "high", "low", "close", "volume", "dividend", "split_ratio", "adj_close", "logret"]
+        cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "dividend",
+            "split_ratio",
+            "adj_close",
+            "logret",
+        ]
         available = [c for c in cols if c in df.columns]
         return df[available]

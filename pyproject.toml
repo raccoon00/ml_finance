@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Vladimir Chekmenyov", email = "vladimir.chekmenyov1@yandex.ru" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiomoex>=2.1.2",
     "ipykernel>=7.0.1",
@@ -14,10 +14,10 @@ dependencies = [
     "matplotlib>=3.10.7",
     "numpy>=2.3.4",
     "pandas>=2.3.3",
+    "pyarrow>=22.0.0",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",
     "statsmodels>=0.14.5",
-    "torch>=2.9.0",
     "tqdm>=4.67.1",
     "webdataset>=1.0.2",
     "xgboost>=3.1.0",

@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 datasets/
+data/
 notebooks/.ipynb_checkpoints/
 notebooks/.ipynb_checkpoints
 **/.ipynb_checkpoints/
